@@ -13,6 +13,8 @@ import submissionRoutes from "./routes/submissions.js";
 import withdrawalRoutes from "./routes/withdrawals.js";
 import paymentRoutes from "./routes/payments.js";
 import notificationRoutes from "./routes/notifications.js";
+import blogRoutes from "./routes/blogs.js";
+import adminRoutes from "./routes/admin.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -42,6 +44,8 @@ app.use('/api/submissions', submissionRoutes);
 app.use('/api/withdrawals', withdrawalRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/blogs', blogRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Basic route
 app.get('/', (req, res) => {
