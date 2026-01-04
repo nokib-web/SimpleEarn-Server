@@ -1,7 +1,6 @@
 import express from 'express';
-import Task from '../models/Task.js';
-import Submission from '../models/Submission.js';
-import User from '../models/User.js';
+import { ObjectId } from 'mongodb';
+import { Tasks, Users } from '../config/collections.js';
 import { verifyToken, checkRole } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -9,8 +8,9 @@ const router = express.Router();
 // Get all available tasks (where required_workers > 0)
 router.get('/available', async (req, res) => {
   try {
-    const tasks = await Task.find({ required_workers: { $gt: 0 }, status: 'active' })
-      .sort({ completion_date: 1 });
+    const tasks = await Tasks().find({ required_workers: { $gt: 0 }, status: 'active' })
+      .sort({ completion_date: 1 })
+      .toArray();
     res.json(tasks);
   } catch (error) {
     console.error('Get available tasks error:', error);
@@ -21,7 +21,7 @@ router.get('/available', async (req, res) => {
 // Get task by ID
 router.get('/:id', async (req, res) => {
   try {
-    const task = await Task.findById(req.params.id);
+    const task = await Tasks().findOne({ _id: new ObjectId(req.params.id) });
     if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
@@ -49,32 +49,37 @@ router.post('/', verifyToken, checkRole('buyer'), async (req, res) => {
     const totalPayable = required_workers * payable_amount;
 
     if (buyer.coin < totalPayable) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         message: 'Not available Coin. Purchase Coin',
         required: totalPayable,
         available: buyer.coin
       });
     }
 
-    const task = new Task({
+    const task = {
       task_title,
       task_detail,
-      required_workers,
-      payable_amount,
-      completion_date,
+      required_workers: parseInt(required_workers),
+      payable_amount: parseInt(payable_amount),
+      completion_date: new Date(completion_date),
       submission_info,
       task_image_url: task_image_url || '',
       buyer_email: buyer.email,
-      buyer_name: buyer.name
-    });
+      buyer_name: buyer.name,
+      status: 'active',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
-    await task.save();
+    const result = await Tasks().insertOne(task);
 
     // Deduct coins from buyer
-    buyer.coin -= totalPayable;
-    await buyer.save();
+    await Users().updateOne(
+      { _id: buyer._id },
+      { $inc: { coin: -totalPayable } }
+    );
 
-    res.status(201).json({ message: 'Task created successfully', task });
+    res.status(201).json({ message: 'Task created successfully', task: { ...task, _id: result.insertedId } });
   } catch (error) {
     console.error('Create task error:', error);
     res.status(500).json({ message: 'Error creating task', error: error.message });
@@ -87,7 +92,7 @@ router.patch('/:id', verifyToken, checkRole('buyer'), async (req, res) => {
     const { id } = req.params;
     const { task_title, task_detail, submission_info } = req.body;
 
-    const task = await Task.findById(id);
+    const task = await Tasks().findOne({ _id: new ObjectId(id) });
     if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
@@ -96,12 +101,20 @@ router.patch('/:id', verifyToken, checkRole('buyer'), async (req, res) => {
       return res.status(403).json({ message: 'You can only update your own tasks' });
     }
 
-    task.task_title = task_title || task.task_title;
-    task.task_detail = task_detail || task.task_detail;
-    task.submission_info = submission_info || task.submission_info;
+    const updateData = {
+      updatedAt: new Date()
+    };
+    if (task_title) updateData.task_title = task_title;
+    if (task_detail) updateData.task_detail = task_detail;
+    if (submission_info) updateData.submission_info = submission_info;
 
-    await task.save();
-    res.json({ message: 'Task updated successfully', task });
+    const result = await Tasks().findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: updateData },
+      { returnDocument: 'after' }
+    );
+
+    res.json({ message: 'Task updated successfully', task: result });
   } catch (error) {
     console.error('Update task error:', error);
     res.status(500).json({ message: 'Error updating task', error: error.message });
@@ -112,8 +125,8 @@ router.patch('/:id', verifyToken, checkRole('buyer'), async (req, res) => {
 router.delete('/:id', verifyToken, checkRole('buyer', 'admin'), async (req, res) => {
   try {
     const { id } = req.params;
-    const task = await Task.findById(id);
-    
+    const task = await Tasks().findOne({ _id: new ObjectId(id) });
+
     if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
@@ -127,11 +140,13 @@ router.delete('/:id', verifyToken, checkRole('buyer', 'admin'), async (req, res)
     if (req.userRole === 'buyer') {
       const buyer = req.userDoc;
       const refundAmount = task.required_workers * task.payable_amount;
-      buyer.coin += refundAmount;
-      await buyer.save();
+      await Users().updateOne(
+        { _id: buyer._id },
+        { $inc: { coin: refundAmount } }
+      );
     }
 
-    await Task.findByIdAndDelete(id);
+    await Tasks().deleteOne({ _id: new ObjectId(id) });
     res.json({ message: 'Task deleted successfully' });
   } catch (error) {
     console.error('Delete task error:', error);
@@ -142,8 +157,9 @@ router.delete('/:id', verifyToken, checkRole('buyer', 'admin'), async (req, res)
 // Get buyer's tasks
 router.get('/buyer/my-tasks', verifyToken, checkRole('buyer'), async (req, res) => {
   try {
-    const tasks = await Task.find({ buyer_email: req.user.email })
-      .sort({ completion_date: -1 });
+    const tasks = await Tasks().find({ buyer_email: req.user.email })
+      .sort({ completion_date: -1 })
+      .toArray();
     res.json(tasks);
   } catch (error) {
     console.error('Get buyer tasks error:', error);
@@ -154,7 +170,7 @@ router.get('/buyer/my-tasks', verifyToken, checkRole('buyer'), async (req, res) 
 // Get all tasks (Admin only)
 router.get('/', verifyToken, checkRole('admin'), async (req, res) => {
   try {
-    const tasks = await Task.find().sort({ createdAt: -1 });
+    const tasks = await Tasks().find().sort({ createdAt: -1 }).toArray();
     res.json(tasks);
   } catch (error) {
     console.error('Get all tasks error:', error);
@@ -163,4 +179,3 @@ router.get('/', verifyToken, checkRole('admin'), async (req, res) => {
 });
 
 export default router;
-

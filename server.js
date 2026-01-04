@@ -1,32 +1,38 @@
-import express from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import mongoose from 'mongoose';
-import authRoutes from './routes/auth.js';
-import userRoutes from './routes/users.js';
-import taskRoutes from './routes/tasks.js';
-import submissionRoutes from './routes/submissions.js';
-import withdrawalRoutes from './routes/withdrawals.js';
-import paymentRoutes from './routes/payments.js';
-import notificationRoutes from './routes/notifications.js';
-
+import dotenv from "dotenv";
 dotenv.config();
+
+import express from "express";
+import cors from "cors";
+import morgan from "morgan";
+import { connectDB } from "./config/db.js";
+
+import authRoutes from "./routes/auth.js";
+import userRoutes from "./routes/users.js";
+import taskRoutes from "./routes/tasks.js";
+import submissionRoutes from "./routes/submissions.js";
+import withdrawalRoutes from "./routes/withdrawals.js";
+import paymentRoutes from "./routes/payments.js";
+import notificationRoutes from "./routes/notifications.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+
 // Middleware
 app.use(cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    origin: [
+        process.env.CLIENT_URL || 'http://localhost:5173',
+        'http://localhost:5174',
+        'http://localhost:5173'
+    ],
     credentials: true
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(morgan('dev'));
 
 // MongoDB connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/simpleearn')
-    .then(() => console.log('MongoDB connected successfully'))
-    .catch((error) => console.error('MongoDB connection error:', error));
+connectDB();
 
 // Routes
 app.use('/api/auth', authRoutes);

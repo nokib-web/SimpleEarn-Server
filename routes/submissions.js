@@ -1,8 +1,6 @@
 import express from 'express';
-import Submission from '../models/Submission.js';
-import Task from '../models/Task.js';
-import User from '../models/User.js';
-import Notification from '../models/Notification.js';
+import { ObjectId } from 'mongodb';
+import { Submissions, Tasks, Users, Notifications } from '../config/collections.js';
 import { verifyToken, checkRole } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -13,7 +11,7 @@ router.post('/', verifyToken, checkRole('worker'), async (req, res) => {
     const { task_id, submission_details } = req.body;
     const worker = req.userDoc;
 
-    const task = await Task.findById(task_id);
+    const task = await Tasks().findOne({ _id: new ObjectId(task_id) });
     if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
@@ -22,8 +20,8 @@ router.post('/', verifyToken, checkRole('worker'), async (req, res) => {
       return res.status(400).json({ message: 'Task is already full' });
     }
 
-    const submission = new Submission({
-      task_id,
+    const submission = {
+      task_id: new ObjectId(task_id),
       task_title: task.task_title,
       payable_amount: task.payable_amount,
       worker_email: worker.email,
@@ -31,24 +29,30 @@ router.post('/', verifyToken, checkRole('worker'), async (req, res) => {
       buyer_email: task.buyer_email,
       buyer_name: task.buyer_name,
       submission_details,
-      status: 'pending'
-    });
+      status: 'pending',
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
-    await submission.save();
+    const result = await Submissions().insertOne(submission);
 
     // Decrease required_workers
-    task.required_workers -= 1;
-    await task.save();
+    await Tasks().updateOne(
+      { _id: new ObjectId(task_id) },
+      { $inc: { required_workers: -1 }, $set: { updatedAt: new Date() } }
+    );
 
     // Create notification for buyer
-    const notification = new Notification({
+    const notification = {
       message: `${worker.name} has submitted a task: ${task.task_title}`,
       toEmail: task.buyer_email,
-      actionRoute: '/dashboard/task-review'
-    });
-    await notification.save();
+      actionRoute: '/dashboard/task-review',
+      isRead: false,
+      createdAt: new Date()
+    };
+    await Notifications().insertOne(notification);
 
-    res.status(201).json({ message: 'Submission created successfully', submission });
+    res.status(201).json({ message: 'Submission created successfully', submission: { ...submission, _id: result.insertedId } });
   } catch (error) {
     console.error('Create submission error:', error);
     res.status(500).json({ message: 'Error creating submission', error: error.message });
@@ -62,12 +66,14 @@ router.get('/worker/my-submissions', verifyToken, checkRole('worker'), async (re
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    const submissions = await Submission.find({ worker_email: req.user.email })
+    const query = { worker_email: req.user.email };
+    const submissions = await Submissions().find(query)
       .sort({ createdAt: -1 })
       .skip(skip)
-      .limit(limit);
+      .limit(limit)
+      .toArray();
 
-    const total = await Submission.countDocuments({ worker_email: req.user.email });
+    const total = await Submissions().countDocuments(query);
 
     res.json({
       submissions,
@@ -89,16 +95,17 @@ router.get('/worker/stats', verifyToken, checkRole('worker'), async (req, res) =
   try {
     const workerEmail = req.user.email;
 
-    const totalSubmissions = await Submission.countDocuments({ worker_email: workerEmail });
-    const pendingSubmissions = await Submission.countDocuments({ 
-      worker_email: workerEmail, 
-      status: 'pending' 
+    const totalSubmissions = await Submissions().countDocuments({ worker_email: workerEmail });
+    const pendingSubmissions = await Submissions().countDocuments({
+      worker_email: workerEmail,
+      status: 'pending'
     });
 
-    const approvedSubmissions = await Submission.find({ 
-      worker_email: workerEmail, 
-      status: 'approved' 
-    });
+    const approvedSubmissions = await Submissions().find({
+      worker_email: workerEmail,
+      status: 'approved'
+    }).toArray();
+
     const totalEarning = approvedSubmissions.reduce((sum, sub) => sum + sub.payable_amount, 0);
 
     res.json({
@@ -115,10 +122,10 @@ router.get('/worker/stats', verifyToken, checkRole('worker'), async (req, res) =
 // Get approved submissions for worker
 router.get('/worker/approved', verifyToken, checkRole('worker'), async (req, res) => {
   try {
-    const submissions = await Submission.find({ 
-      worker_email: req.user.email, 
-      status: 'approved' 
-    }).sort({ createdAt: -1 });
+    const submissions = await Submissions().find({
+      worker_email: req.user.email,
+      status: 'approved'
+    }).sort({ createdAt: -1 }).toArray();
     res.json(submissions);
   } catch (error) {
     console.error('Get approved submissions error:', error);
@@ -126,13 +133,34 @@ router.get('/worker/approved', verifyToken, checkRole('worker'), async (req, res
   }
 });
 
+// Get buyer stats (approved submissions total payment)
+router.get('/buyer/stats', verifyToken, checkRole('buyer'), async (req, res) => {
+  try {
+    const buyerEmail = req.user.email;
+
+    const approvedSubmissions = await Submissions().find({
+      buyer_email: buyerEmail,
+      status: 'approved'
+    }).toArray();
+
+    const totalPayment = approvedSubmissions.reduce((sum, sub) => sum + sub.payable_amount, 0);
+
+    res.json({
+      totalPayment
+    });
+  } catch (error) {
+    console.error('Get buyer stats error:', error);
+    res.status(500).json({ message: 'Error fetching stats', error: error.message });
+  }
+});
+
 // Get pending submissions for buyer to review
 router.get('/buyer/pending', verifyToken, checkRole('buyer'), async (req, res) => {
   try {
-    const submissions = await Submission.find({ 
-      buyer_email: req.user.email, 
-      status: 'pending' 
-    }).sort({ createdAt: -1 });
+    const submissions = await Submissions().find({
+      buyer_email: req.user.email,
+      status: 'pending'
+    }).sort({ createdAt: -1 }).toArray();
     res.json(submissions);
   } catch (error) {
     console.error('Get pending submissions error:', error);
@@ -144,7 +172,7 @@ router.get('/buyer/pending', verifyToken, checkRole('buyer'), async (req, res) =
 router.patch('/:id/approve', verifyToken, checkRole('buyer'), async (req, res) => {
   try {
     const { id } = req.params;
-    const submission = await Submission.findById(id);
+    const submission = await Submissions().findOne({ _id: new ObjectId(id) });
 
     if (!submission) {
       return res.status(404).json({ message: 'Submission not found' });
@@ -158,25 +186,28 @@ router.patch('/:id/approve', verifyToken, checkRole('buyer'), async (req, res) =
       return res.status(400).json({ message: 'Submission is not pending' });
     }
 
-    submission.status = 'approved';
-    await submission.save();
+    await Submissions().updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: 'approved', updatedAt: new Date() } }
+    );
 
     // Increase worker's coins
-    const worker = await User.findOne({ email: submission.worker_email });
-    if (worker) {
-      worker.coin += submission.payable_amount;
-      await worker.save();
-    }
+    await Users().updateOne(
+      { email: submission.worker_email },
+      { $inc: { coin: submission.payable_amount } }
+    );
 
     // Create notification for worker
-    const notification = new Notification({
+    const notification = {
       message: `You have earned ${submission.payable_amount} coins from ${submission.buyer_name} for completing ${submission.task_title}`,
       toEmail: submission.worker_email,
-      actionRoute: '/dashboard/worker-home'
-    });
-    await notification.save();
+      actionRoute: '/dashboard/worker-home',
+      isRead: false,
+      createdAt: new Date()
+    };
+    await Notifications().insertOne(notification);
 
-    res.json({ message: 'Submission approved successfully', submission });
+    res.json({ message: 'Submission approved successfully' });
   } catch (error) {
     console.error('Approve submission error:', error);
     res.status(500).json({ message: 'Error approving submission', error: error.message });
@@ -187,7 +218,7 @@ router.patch('/:id/approve', verifyToken, checkRole('buyer'), async (req, res) =
 router.patch('/:id/reject', verifyToken, checkRole('buyer'), async (req, res) => {
   try {
     const { id } = req.params;
-    const submission = await Submission.findById(id);
+    const submission = await Submissions().findOne({ _id: new ObjectId(id) });
 
     if (!submission) {
       return res.status(404).json({ message: 'Submission not found' });
@@ -201,25 +232,28 @@ router.patch('/:id/reject', verifyToken, checkRole('buyer'), async (req, res) =>
       return res.status(400).json({ message: 'Submission is not pending' });
     }
 
-    submission.status = 'rejected';
-    await submission.save();
+    await Submissions().updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { status: 'rejected', updatedAt: new Date() } }
+    );
 
     // Increase required_workers
-    const task = await Task.findById(submission.task_id);
-    if (task) {
-      task.required_workers += 1;
-      await task.save();
-    }
+    await Tasks().updateOne(
+      { _id: submission.task_id },
+      { $inc: { required_workers: 1 }, $set: { updatedAt: new Date() } }
+    );
 
     // Create notification for worker
-    const notification = new Notification({
+    const notification = {
       message: `Your submission for ${submission.task_title} has been rejected by ${submission.buyer_name}`,
       toEmail: submission.worker_email,
-      actionRoute: '/dashboard/my-submissions'
-    });
-    await notification.save();
+      actionRoute: '/dashboard/my-submissions',
+      isRead: false,
+      createdAt: new Date()
+    };
+    await Notifications().insertOne(notification);
 
-    res.json({ message: 'Submission rejected successfully', submission });
+    res.json({ message: 'Submission rejected successfully' });
   } catch (error) {
     console.error('Reject submission error:', error);
     res.status(500).json({ message: 'Error rejecting submission', error: error.message });
@@ -227,4 +261,3 @@ router.patch('/:id/reject', verifyToken, checkRole('buyer'), async (req, res) =>
 });
 
 export default router;
-

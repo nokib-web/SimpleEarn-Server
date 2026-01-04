@@ -1,4 +1,5 @@
 import admin from '../utils/firebaseAdmin.js';
+import { Users } from '../config/collections.js';
 
 export const verifyToken = async (req, res, next) => {
   try {
@@ -6,6 +7,11 @@ export const verifyToken = async (req, res, next) => {
 
     if (!token) {
       return res.status(401).json({ message: 'No token provided' });
+    }
+
+    // Check if Firebase Admin is initialized
+    if (!admin.apps.length) {
+      return res.status(500).json({ message: 'Firebase Admin not initialized. Please check server configuration.' });
     }
 
     const decodedToken = await admin.auth().verifyIdToken(token);
@@ -24,8 +30,7 @@ export const checkRole = (...allowedRoles) => {
         return res.status(401).json({ message: 'User not authenticated' });
       }
 
-      const User = (await import('../models/User.js')).default;
-      const user = await User.findOne({ email: req.user.email });
+      const user = await Users().findOne({ email: req.user.email });
 
       if (!user) {
         return res.status(404).json({ message: 'User not found' });
@@ -45,3 +50,9 @@ export const checkRole = (...allowedRoles) => {
   };
 };
 
+// Convenience middleware for specific roles
+export const verifyWorker = checkRole('worker');
+export const verifyBuyer = checkRole('buyer');
+export const verifyAdmin = checkRole('admin');
+export const verifyBuyerOrAdmin = checkRole('buyer', 'admin');
+export const verifyWorkerOrAdmin = checkRole('worker', 'admin');

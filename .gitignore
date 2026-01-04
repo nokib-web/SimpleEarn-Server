@@ -1,4 +1,4 @@
-.env
+
 node_modules
 dist/
 .vscode/
@@ -11,10 +11,11 @@ yarn-error.log*
 .idea/
 *.iml
 *.swp
-
 .env
+
 .env.local
 .env.production
 .next/
 dist/
 build/
+firebase-admin-sdk.json

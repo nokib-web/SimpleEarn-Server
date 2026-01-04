@@ -1,6 +1,6 @@
 import express from 'express';
-import Payment from '../models/Payment.js';
-import User from '../models/User.js';
+import { ObjectId } from 'mongodb';
+import { Payments, Users } from '../config/collections.js';
 import Stripe from 'stripe';
 import { verifyToken, checkRole } from '../middleware/auth.js';
 
@@ -34,28 +34,67 @@ router.post('/create-intent', verifyToken, checkRole('buyer'), async (req, res) 
   }
 });
 
-// Confirm payment (Buyer only) - Dummy implementation if Stripe not configured
+// Confirm payment (Buyer only) - Verifies with Stripe
 router.post('/confirm', verifyToken, checkRole('buyer'), async (req, res) => {
   try {
     const { amount, coins, payment_intent_id } = req.body;
     const buyer = req.userDoc;
 
-    // Create payment record
-    const payment = new Payment({
-      buyer_email: buyer.email,
-      amount,
-      coins,
-      payment_intent_id: payment_intent_id || 'dummy_' + Date.now(),
-      status: 'completed'
-    });
+    if (!payment_intent_id) {
+      return res.status(400).json({ message: 'Payment Intent ID is required' });
+    }
 
-    await payment.save();
+    // Real verification: Retrieve the payment intent from Stripe
+    let isSucceeded = false;
+    let finalIntentId = payment_intent_id;
+
+    if (payment_intent_id.startsWith('pi_')) {
+      try {
+        const intent = await stripe.paymentIntents.retrieve(payment_intent_id);
+        if (intent.status === 'succeeded') {
+          isSucceeded = true;
+        } else {
+          return res.status(400).json({ message: `Payment failed with status: ${intent.status}` });
+        }
+      } catch (stripeErr) {
+        console.error('Stripe retrieval error:', stripeErr);
+        return res.status(400).json({ message: 'Invalid Payment Intent ID' });
+      }
+    } else if (payment_intent_id.startsWith('dummy_')) {
+      // Allow dummy only for testing if explicitly desired, but since user asked for real:
+      // isSucceeded = true; 
+      return res.status(400).json({ message: 'Dummy payments not allowed for real implementation' });
+    }
+
+    if (!isSucceeded) {
+      return res.status(400).json({ message: 'Payment verification failed' });
+    }
+
+    // Prevent duplicate processing of the same payment intent
+    const existingPayment = await Payments().findOne({ payment_intent_id: finalIntentId });
+    if (existingPayment) {
+      return res.status(400).json({ message: 'This payment has already been processed' });
+    }
+
+    // Create payment record
+    const payment = {
+      buyer_email: buyer.email,
+      amount: parseFloat(amount),
+      coins: parseInt(coins),
+      payment_intent_id: finalIntentId,
+      status: 'completed',
+      createdAt: new Date()
+    };
+
+    const result = await Payments().insertOne(payment);
 
     // Increase buyer's coins
-    buyer.coin += coins;
-    await buyer.save();
+    await Users().updateOne(
+      { _id: buyer._id },
+      { $inc: { coin: parseInt(coins) } }
+    );
 
-    res.json({ message: 'Payment confirmed successfully', payment });
+    res.json({ message: 'Payment confirmed successfully', payment: { ...payment, _id: result.insertedId } });
   } catch (error) {
     console.error('Confirm payment error:', error);
     res.status(500).json({ message: 'Error confirming payment', error: error.message });
@@ -65,8 +104,8 @@ router.post('/confirm', verifyToken, checkRole('buyer'), async (req, res) => {
 // Get payment history (Buyer only)
 router.get('/history', verifyToken, checkRole('buyer'), async (req, res) => {
   try {
-    const payments = await Payment.find({ buyer_email: req.user.email })
-      .sort({ createdAt: -1 });
+    const payments = await Payments().find({ buyer_email: req.user.email })
+      .sort({ createdAt: -1 }).toArray();
     res.json(payments);
   } catch (error) {
     console.error('Get payment history error:', error);
@@ -77,7 +116,7 @@ router.get('/history', verifyToken, checkRole('buyer'), async (req, res) => {
 // Get all payments (Admin only)
 router.get('/', verifyToken, checkRole('admin'), async (req, res) => {
   try {
-    const payments = await Payment.find().sort({ createdAt: -1 });
+    const payments = await Payments().find().sort({ createdAt: -1 }).toArray();
     res.json(payments);
   } catch (error) {
     console.error('Get all payments error:', error);
@@ -86,4 +125,3 @@ router.get('/', verifyToken, checkRole('admin'), async (req, res) => {
 });
 
 export default router;
-

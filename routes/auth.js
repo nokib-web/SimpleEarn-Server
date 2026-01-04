@@ -1,5 +1,5 @@
 import express from 'express';
-import User from '../models/User.js';
+import { Users } from '../config/collections.js';
 import { verifyToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -7,7 +7,7 @@ const router = express.Router();
 // Register user
 router.post('/register', async (req, res) => {
     try {
-        const { name, email, photoURL, password, role } = req.body;
+        const { name, email, photoURL, role } = req.body;
 
         // Validate role
         if (!['worker', 'buyer'].includes(role)) {
@@ -15,7 +15,7 @@ router.post('/register', async (req, res) => {
         }
 
         // Check if user already exists
-        const existingUser = await User.findOne({ email });
+        const existingUser = await Users().findOne({ email });
         if (existingUser) {
             return res.status(400).json({ message: 'User already exists with this email' });
         }
@@ -23,20 +23,23 @@ router.post('/register', async (req, res) => {
         // Set initial coins based on role
         const initialCoins = role === 'worker' ? 10 : 50;
 
-        // Create user
-        const user = new User({
+        // Create user object
+        const user = {
             name,
             email,
             photoURL: photoURL || '',
             role,
-            coin: initialCoins
-        });
+            coin: initialCoins,
+            createdAt: new Date(),
+            updatedAt: new Date()
+        };
 
-        await user.save();
+        const result = await Users().insertOne(user);
 
         res.status(201).json({
             message: 'User registered successfully',
             user: {
+                _id: result.insertedId,
                 name: user.name,
                 email: user.email,
                 role: user.role,
@@ -52,7 +55,7 @@ router.post('/register', async (req, res) => {
 // Get user info (after Firebase auth)
 router.get('/me', verifyToken, async (req, res) => {
     try {
-        const user = await User.findOne({ email: req.user.email });
+        const user = await Users().findOne({ email: req.user.email });
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -74,4 +77,3 @@ router.get('/me', verifyToken, async (req, res) => {
 });
 
 export default router;
-

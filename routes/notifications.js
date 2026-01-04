@@ -1,5 +1,6 @@
 import express from 'express';
-import Notification from '../models/Notification.js';
+import { ObjectId } from 'mongodb';
+import { Notifications } from '../config/collections.js';
 import { verifyToken } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -8,14 +9,14 @@ const router = express.Router();
 router.get('/:email', verifyToken, async (req, res) => {
   try {
     const { email } = req.params;
-    
+
     // Verify user can only access their own notifications
     if (req.user.email !== email) {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    const notifications = await Notification.find({ toEmail: email })
-      .sort({ time: -1 });
+    const notifications = await Notifications().find({ toEmail: email })
+      .sort({ createdAt: -1 }).toArray();
 
     res.json(notifications);
   } catch (error) {
@@ -28,7 +29,7 @@ router.get('/:email', verifyToken, async (req, res) => {
 router.patch('/:id/read', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
-    const notification = await Notification.findById(id);
+    const notification = await Notifications().findOne({ _id: new ObjectId(id) });
 
     if (!notification) {
       return res.status(404).json({ message: 'Notification not found' });
@@ -39,10 +40,12 @@ router.patch('/:id/read', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Access denied' });
     }
 
-    notification.isRead = true;
-    await notification.save();
+    await Notifications().updateOne(
+      { _id: new ObjectId(id) },
+      { $set: { isRead: true } }
+    );
 
-    res.json({ message: 'Notification marked as read', notification });
+    res.json({ message: 'Notification marked as read' });
   } catch (error) {
     console.error('Mark notification read error:', error);
     res.status(500).json({ message: 'Error updating notification', error: error.message });
@@ -50,4 +53,3 @@ router.patch('/:id/read', verifyToken, async (req, res) => {
 });
 
 export default router;
-
