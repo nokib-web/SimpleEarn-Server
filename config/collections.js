@@ -6,3 +6,4 @@ export const Submissions = () => getCollection('submissions');
 export const Withdrawals = () => getCollection('withdrawals');
 export const Payments = () => getCollection('payments');
 export const Notifications = () => getCollection('notifications');
+export const Blogs = () => getCollection('blogs');
