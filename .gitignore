@@ -12,6 +12,7 @@ yarn-error.log*
 *.iml
 *.swp
 .env
+env_server_copy.txt
 
 .env.local
 .env.production
